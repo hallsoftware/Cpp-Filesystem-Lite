@@ -459,27 +459,61 @@ void prepend_extended_fs_indicator(T& path_str);
 template<>
 void prepend_extended_fs_indicator(std::wstring& path_str)
 {
+	// Prevent expansion if path contains "$" (indicating environment variable replacement)
+	if (path_str.find('$') != std::wstring::npos)
+	{
+		std::string npath;
+		to_narrow_string(path_str, npath);
+		throw filesystem_error("Path strings with environment variable indicators ('$') cannot be used in this context.", __FILE__, __LINE__, npath, "");
+	}
+
 	// Don't bother if a path is less than (MAX_PATH-12) characters.
 	// MAX_PATH - 12 is needed when creating directories (due to the mandatory 8.3 minimum filename requirements).
 	// Source: http://msdn.microsoft.com/en-us/library/aa365247(VS.85).aspx#maxpath
 	if (path_str.size() < (MAX_PATH - 12))
 	{
-		return;
+		return;	// if the path is empty, we'll return here...
 	}
-	// TODO: prevent expansion if path contains "." or ".." elements.
+
+	// Prevent expansion if path contains "." or ".." elements.
 	// The extended indicator "\\?\" prevents expansion of "." and ".." path elements.
 	// Source: http://msdn.microsoft.com/en-us/library/aa365247(VS.85).aspx#maxpath
-	if ((!path_str.empty()) && (path_str[0] == '.'))
+	//
+	//	We don't have to worry about the path being exactly ".." or "." since these path
+	//	strings are too short and the function will return inside the previous if block.
+	//	We need to test for the following:
+	//	* occurrances of "\..\"
+	//	* occurrances of "\.\"
+	//	* occurrances of "..\" at the beginning of the path string
+	//	* occurrances of ".\" at the beginning of the path string
+	//	* occurrances of "\.." at the end of the path string
+	//	* occurrances of "\." at the end of the path string
+	if ((path_str.find(L"\\..\\") != std::wstring::npos) ||
+		(path_str.find(L"\\.\\") != std::wstring::npos) ||
+		(path_str.find(L"..\\") == 0) ||
+		(path_str.find(L".\\") == 0) ||
+		(path_str.find(L"\\..", path_str.size()-3) != std::wstring::npos) ||
+		(path_str.find(L"\\.", path_str.size()-2) != std::wstring::npos))
 	{
-		return; // Windows doesn't seem to like the following extended paths: "\\?\." or "\\?\.."
+		std::string npath;
+		to_narrow_string(path_str, npath);
+		throw filesystem_error("Path is too long to contain \".\" or \"..\".  Windows cannot properly expand the path string.", __FILE__, __LINE__, npath, "");
 	}
-	// TODO: apply special extension for UNC paths.
-	// "\\server\share" should become "\\?\UNC\server\share".
-	// Source: http://msdn.microsoft.com/en-us/library/aa365247(VS.85).aspx#maxpath
+
 	std::wstring extended_fs_indicator(L"\\\\?\\");
-	if (path_str.find(extended_fs_indicator) != 0)
+	std::wstring extended_unc_indicator(L"\\\\?\\UNC");
+	if (path_str.find(extended_fs_indicator) != 0) // will also match the UNC extended filesystem indicator
 	{
-		path_str.swap(extended_fs_indicator.append(path_str));
+		if (path_str.find(L"\\\\") == 0) // "\\" found at the beginning of the string -- indicative of a UNC path
+		{
+			// "\\server\share" should become "\\?\UNC\server\share".
+			// Source: http://msdn.microsoft.com/en-us/library/aa365247(VS.85).aspx#maxpath
+			path_str.swap(extended_unc_indicator.append(path_str.begin()+1, path_str.end()));
+		}
+		else
+		{
+			path_str.swap(extended_fs_indicator.append(path_str));
+		}
 	}
 }
 
